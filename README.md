@@ -42,3 +42,22 @@ tail -f /mnt/usb_recuperacion/recuperados_*/logs/recovery_*.log
 - search_[timestamp].log: Registro detallado de la búsqueda
 - patterns_[timestamp].txt: Patrones encontrados
 - recovery_[timestamp].log: Proceso de recuperación
+
+## Mejoras en Tiempo Real
+
+El proceso de recuperación puede mejorarse sin detenerlo:
+
+1. Monitoreo paralelo:
+   ```bash
+   ./script_recuperacion_monitor.sh
+   ```
+
+2. Análisis de resultados parciales:
+   ```bash
+   tail -f /mnt/usb_recuperacion/recuperados_*/logs/*.log
+   ```
+
+3. Ajuste de parámetros en vivo:
+   - Los bloques encontrados se guardan en successful_blocks.txt
+   - El análisis continúa incluso si se encuentran patrones
+   - Los nuevos patrones se añaden automáticamente

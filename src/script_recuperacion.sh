@@ -666,7 +666,18 @@ main() {
 # Verificar herramientas necesarias
 check_tools() {
     local missing_tools=()
-    local tools=("dd" "grep" "pv" "parallel" "strings" "hexdump" "sendmail")
+    local tools=(
+        "dd" 
+        "grep" 
+        "pv" 
+        "parallel" 
+        "strings" 
+        "hexdump" 
+        "mailx"     # Añadido mailx
+        "awk"
+        "sort"
+        "uniq"
+    )
     
     echo -e "${YELLOW}Verificando herramientas necesarias...${NC}"
     
@@ -678,9 +689,17 @@ check_tools() {
     
     if [ ${#missing_tools[@]} -ne 0 ]; then
         echo -e "${RED}Faltan las siguientes herramientas: ${missing_tools[*]}${NC}"
-        echo "Intente instalarlas manualmente con:"
-        echo "pacman -Sy ${missing_tools[*]}"
-        exit 1
+        echo "Instalando herramientas faltantes..."
+        # En Arch Linux (SystemRescue)
+        pacman -Sy --noconfirm "${missing_tools[@]}"
+        
+        # Verificar instalación
+        for tool in "${missing_tools[@]}"; do
+            if ! command -v "$tool" &>/dev/null; then
+                echo -e "${RED}Error: No se pudo instalar $tool${NC}"
+                exit 1
+            fi
+        done
     fi
     
     echo -e "${GREEN}✓ Todas las herramientas necesarias están instaladas${NC}"
