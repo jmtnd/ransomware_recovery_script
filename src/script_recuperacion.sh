@@ -1,14 +1,16 @@
 #!/bin/bash
+# Ransomware Recovery Script - Versión Final Mejorada
 
-# Configuración de seguridad
+########################################
+# Configuración de seguridad y colores #
+########################################
 set -o errexit
 set -o nounset
 set -o pipefail
 
-# Colores y configuración
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
+YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
@@ -25,6 +27,9 @@ declare -r LOG_DIR="${WORK_DIR}/logs"
 declare -r SCAN_LOG="${LOG_DIR}/scan_${TIMESTAMP}.log"
 declare -r RECOVERY_LOG="${LOG_DIR}/recovery_${TIMESTAMP}.log"
 declare -r PATTERNS_FOUND="${LOG_DIR}/patterns_${TIMESTAMP}.txt"
+declare -r EMAIL_TO="jaime911@gmail.com"
+declare -r EMAIL_FROM="recovery_script@localhost"
+declare RAW_BLOCK_SIZE=$((128*1024*1024))  # 128MB, sin -r para poder modificarlo
 
 # Patrones específicos de backup encontrados
 BACKUP_PATTERNS=(
@@ -42,10 +47,19 @@ declare -A TAMANOS_ESPERADOS=(
 
 # Buscar secuencias de bytes comunes en backups
 BACKUP_SIGNATURES=(
-    "\x42\x4D\x53"          # "BMS" en hex
-    "\x42\x41\x43\x4B\x55\x50"  # "BACKUP" en hex
-    "\x42\x4D\x53\x5F\x42\x41\x43\x4B\x55\x50"  # "BMS_BACKUP" en hex
+    "424D53"          # "BMS" en hex
+    "4241434B5550"    # "BACKUP" en hex
+    "424D535F4241434B5550"  # "BMS_BACKUP" en hex
 )
+
+########################################
+# Sistema de IA y Análisis Predictivo  #
+########################################
+
+# Configuración del sistema de IA
+declare -r MIN_CLUSTER_SIZE=3
+declare -r PATTERN_SCORE_THRESHOLD=10
+declare -r PREDICTION_CONFIDENCE=0.7
 
 ######################################
 # Funciones auxiliares y de logging  #
@@ -65,7 +79,19 @@ trap 'cleanup $?' EXIT
 
 # Función para manejo uniforme de errores
 handle_error() {
-    echo -e "${RED}ERROR: $1${NC}" >&2
+    local error_msg="$1"
+    echo -e "${RED}ERROR: $error_msg${NC}" >&2
+    
+    # Enviar notificación de error
+    local email_subject="[Recovery] ERROR CRÍTICO"
+    local email_message="Se ha producido un error en el proceso:
+- Error: $error_msg
+- Fecha: $(date)
+- Ubicación: $DISCO_FUENTE
+- Último comando: $BASH_COMMAND"
+    
+    send_email_notification "$email_subject" "$email_message"
+    
     cleanup 1
 }
 
@@ -217,7 +243,7 @@ validate_backup_integrity() {
     local expected_size="$2"
     local actual_size=$(stat -c%s "$file")
     
-    # Permitir un margen de error de ±1GB
+    # Verificar tamaño con margen de error de ±1GB
     if [ "$actual_size" -lt "$((expected_size-1024*1024*1024))" ] || \
        [ "$actual_size" -gt "$((expected_size+1024*1024*1024))" ]; then
         return 1
@@ -234,6 +260,15 @@ validate_backup_integrity() {
         return 1
     fi
     
+    # Si pasa todas las validaciones, notificar
+    local email_subject="Backup Válido Encontrado"
+    local email_message="Se ha validado un backup:
+- Archivo: $(basename "$file")
+- Tamaño: $(numfmt --to=iec-i --suffix=B $actual_size)
+- Fecha: $(date)
+- Ubicación: $file"
+    
+    send_email_notification "$email_subject" "$email_message"
     return 0
 }
 
@@ -329,91 +364,235 @@ analyze_backup_structure() {
     du -sh "$backup_dir"
 }
 
-# Modificar la función recover_from_raw_sectors para ser más efectiva
+# Función para análisis de clusters
+analyze_clusters() {
+    local CLUSTER_LOG="${LOG_DIR}/clusters_${TIMESTAMP}.log"
+    
+    echo -e "\n${BLUE}=== Análisis de Clusters ===${NC}" | tee -a "$CLUSTER_LOG"
+    log_message "INFO" "Iniciando análisis de clusters" "$CLUSTER_LOG"
+    
+    # Verificar directorio de trabajo
+    if [ ! -d "$WORK_DIR" ]; then
+        log_message "ERROR" "Directorio de trabajo no existe: $WORK_DIR" "$CLUSTER_LOG"
+        return 1
+    fi
+    
+    # Crear archivo de bloques exitosos si no existe
+    touch "${WORK_DIR}/successful_blocks.txt"
+    
+    if [ ! -s "${WORK_DIR}/successful_blocks.txt" ]; then
+        log_message "INFO" "No hay bloques exitosos para analizar aún" "$CLUSTER_LOG"
+        return 0
+    fi
+    
+    local prev_block=0
+    local cluster_size=0
+    local cluster_start=0
+    
+    while read -r block; do
+        if [ $((block - prev_block)) -lt 10 ]; then
+            cluster_size=$((cluster_size + 1))
+            [ $cluster_size -eq 1 ] && cluster_start=$prev_block
+        else
+            if [ $cluster_size -gt $MIN_CLUSTER_SIZE ]; then
+                echo "Cluster encontrado: Inicio=$cluster_start, Tamaño=$cluster_size" | tee -a "$CLUSTER_LOG"
+                echo "$cluster_start $((cluster_start + cluster_size))" >> "${WORK_DIR}/priority_ranges.txt"
+            fi
+            cluster_size=0
+        fi
+        prev_block=$block
+    done < <(sort -n "${WORK_DIR}/successful_blocks.txt")
+    
+    log_message "INFO" "Análisis de clusters completado" "$CLUSTER_LOG"
+    return 0
+}
+
+# Sistema de puntuación para patrones
+score_pattern() {
+    local pattern="$1"
+    local score=0
+    
+    # Puntuar basado en características conocidas
+    [[ $pattern =~ BMS ]] && ((score+=5))
+    [[ $pattern =~ backup ]] && ((score+=3))
+    [[ $pattern =~ [0-9]{4}_[0-9]{2}_[0-9]{2} ]] && ((score+=4))
+    [[ $pattern =~ \.bak$ ]] && ((score+=3))
+    
+    # Puntuar basado en el histórico de éxitos
+    local success_count=$(grep -c "$pattern" "${WORK_DIR}/successful_patterns.txt" 2>/dev/null || echo 0)
+    score=$((score + success_count * 2))
+    
+    echo $score
+}
+
+# Predicción de regiones prometedoras
+predict_next_regions() {
+    local PREDICTION_LOG="${LOG_DIR}/predictions_${TIMESTAMP}.log"
+    
+    echo -e "\n${BLUE}=== Predicción de Regiones ===${NC}" | tee -a "$PREDICTION_LOG"
+    
+    if [ -f "${WORK_DIR}/successful_blocks.txt" ]; then
+        # Calcular diferencias entre bloques exitosos
+        local differences=()
+        local prev_block=0
+        
+        while read -r block; do
+            if [ $prev_block -ne 0 ]; then
+                differences+=($((block - prev_block)))
+            fi
+            prev_block=$block
+        done < <(sort -n "${WORK_DIR}/successful_blocks.txt")
+        
+        # Encontrar patrones comunes
+        local common_diff=$(printf '%d\n' "${differences[@]}" | sort -n | uniq -c | sort -nr | head -n1 | awk '{print $2}')
+        
+        # Predecir próximas ubicaciones
+        local last_block=$(tail -n1 "${WORK_DIR}/successful_blocks.txt")
+        local next_predicted=$((last_block + common_diff))
+        
+        echo "Análisis de patrones:" | tee -a "$PREDICTION_LOG"
+        echo "- Diferencia más común: $common_diff bloques" | tee -a "$PREDICTION_LOG"
+        echo "- Último bloque exitoso: $last_block" | tee -a "$PREDICTION_LOG"
+        echo "- Próxima región predicha: $next_predicted" | tee -a "$PREDICTION_LOG"
+        
+        # Guardar predicción con nivel de confianza
+        echo "$next_predicted $PREDICTION_CONFIDENCE" >> "${WORK_DIR}/predicted_blocks.txt"
+    fi
+}
+
+# Modificar la función recover_from_raw_sectors para usar el sistema de IA
 recover_from_raw_sectors() {
     echo -e "${BLUE}=== Iniciando búsqueda profunda de backups ===${NC}"
+    log_message "INFO" "Iniciando búsqueda profunda" "$RECOVERY_LOG"
+    
+    # Crear directorios necesarios
+    mkdir -p "${WORK_DIR}/learning"
+    mkdir -p "${WORK_DIR}"/{BMS,BMSJoseDiego,BMSsa}/originales
+    
+    # Inicializar archivos
+    touch "${WORK_DIR}/successful_patterns.txt"
+    touch "${WORK_DIR}/successful_blocks.txt"
     
     # Obtener tamaño del disco
     local disk_size=$(blockdev --getsize64 "$DISCO_FUENTE")
-    local block_size=$((128*1024*1024))  # 128MB
-    local total_blocks=$((disk_size / block_size))
+    local total_blocks=$((disk_size / RAW_BLOCK_SIZE))
     
-    # Crear archivo de log específico para la búsqueda
-    local SEARCH_LOG="${LOG_DIR}/search_${TIMESTAMP}.log"
+    log_message "INFO" "Configuración inicial:" "$RECOVERY_LOG"
+    log_message "INFO" "- Disco: $DISCO_FUENTE" "$RECOVERY_LOG"
+    log_message "INFO" "- Tamaño: $(numfmt --to=iec-i --suffix=B $disk_size)" "$RECOVERY_LOG"
+    log_message "INFO" "- Bloques: $total_blocks" "$RECOVERY_LOG"
     
+    echo -e "\n${BLUE}Iniciando escaneo de bloques...${NC}"
+    echo -e "${YELLOW}Presiona Ctrl+C para interrumpir de forma segura${NC}"
+    
+    # Escanear bloques con barra de progreso
+    for block in $(seq 0 $total_blocks); do
+        process_block "$block" "$total_blocks" || break
+    done
+    
+    return 0
+}
+
+# Función de aprendizaje para ajustar patrones
+learn_from_success() {
+    local successful_block="$1"
+    local successful_pattern="$2"
+    local LEARNING_LOG="${LOG_DIR}/learning_${TIMESTAMP}.log"
+    
+    echo -e "\n${BLUE}=== Analizando patrón exitoso ===${NC}" | tee -a "$LEARNING_LOG"
+    echo "Bloque: $successful_block" | tee -a "$LEARNING_LOG"
+    echo "Patrón: $successful_pattern" | tee -a "$LEARNING_LOG"
+    
+    # Extraer contexto alrededor del patrón exitoso
+    dd if="$DISCO_FUENTE" bs=1M skip=$((successful_block*128-1)) count=2 2>/dev/null | \
+    hexdump -C > "${WORK_DIR}/context_${successful_block}.hex"
+    
+    # Analizar patrones comunes antes y después
     {
-        echo "=== Configuración de Búsqueda ==="
-        echo "Fecha inicio: $(date)"
-        echo "Disco: $DISCO_FUENTE"
-        echo "Tamaño total: $(numfmt --to=iec-i --suffix=B $disk_size)"
-        echo "Tamaño de bloque: $(numfmt --to=iec-i --suffix=B $block_size)"
-        echo "Total de bloques: $total_blocks"
-        echo "============================"
-        echo
-        echo "=== Registro de Búsqueda ==="
-    } | tee -a "$SEARCH_LOG"
+        echo "Contexto encontrado:"
+        head -n 20 "${WORK_DIR}/context_${successful_block}.hex"
+        echo "Analizando patrones..."
+    } | tee -a "$LEARNING_LOG"
     
-    # Buscar en paralelo usando bloques más pequeños
-    seq 0 $total_blocks | parallel --bar --eta --jobs $MAX_PARALLEL_JOBS \
-    "dd if=$DISCO_FUENTE bs=$block_size skip={} count=1 2>/dev/null | \
-     (hexdump -C | grep -E '424D535F|4241434B|524553504C' && \
-      echo 'BLOQUE_{}_$(date +%H:%M:%S)' >> $PATTERNS_FOUND.blocks) 2>&1 | \
-      tee -a $SEARCH_LOG"
+    # Ajustar prioridades de búsqueda
+    if ! grep -q "$successful_pattern" "${WORK_DIR}/successful_patterns.txt" 2>/dev/null; then
+        echo "$successful_pattern" >> "${WORK_DIR}/successful_patterns.txt"
+        echo "Nuevo patrón añadido a la base de conocimiento" | tee -a "$LEARNING_LOG"
+    fi
+}
+
+# Función para ajustar estrategia de búsqueda
+adjust_search_strategy() {
+    local LEARNING_LOG="${LOG_DIR}/learning_${TIMESTAMP}.log"
+    local success_rate=0
     
-    # Procesar bloques donde se encontraron patrones
-    if [ -f "$PATTERNS_FOUND.blocks" ]; then
-        echo -e "\n${GREEN}Procesando bloques con patrones encontrados...${NC}" | tee -a "$SEARCH_LOG"
-        while read -r line; do
-            local block=$(echo "$line" | cut -d'_' -f2)
-            local time=$(echo "$line" | cut -d'_' -f3)
-            
-            echo -e "\n=== Análisis de Bloque $block (Encontrado: $time) ===" | tee -a "$SEARCH_LOG"
-            echo -e "Posición: $((block * block_size)) bytes" | tee -a "$SEARCH_LOG"
-            echo -e "Rango: $((block * 128))MB - $(((block + 1) * 128))MB" | tee -a "$SEARCH_LOG"
-            
-            # Extraer segmento
-            echo -e "Extrayendo datos..." | tee -a "$SEARCH_LOG"
-            local start_block=$((block > 8 ? block - 8 : 0))
-            dd if="$DISCO_FUENTE" bs=$block_size skip=$start_block count=16 2>/dev/null | \
-            pv -s $((16*block_size)) > "${WORK_DIR}/raw_block_${block}.dat" 2>&1 | tee -a "$SEARCH_LOG"
-            
-            # Analizar contenido
-            echo -e "Analizando contenido..." | tee -a "$SEARCH_LOG"
-            strings "${WORK_DIR}/raw_block_${block}.dat" | \
-            grep -E "BMS.*backup|BACKUP_HEADER" > "${WORK_DIR}/raw_block_${block}.txt"
-            
-            if [ -s "${WORK_DIR}/raw_block_${block}.txt" ]; then
-                echo -e "Contenido encontrado:" | tee -a "$SEARCH_LOG"
-                cat "${WORK_DIR}/raw_block_${block}.txt" | tee -a "$SEARCH_LOG"
-                
-                # Intentar recuperar
-                for tipo in BMS BMSJoseDiego BMSsa; do
-                    echo -e "\nVerificando si es backup tipo $tipo..." | tee -a "$SEARCH_LOG"
-                    if validate_backup_integrity "${WORK_DIR}/raw_block_${block}.dat" "${TAMANOS_ESPERADOS[$tipo]}"; then
-                        echo -e "${GREEN}✓ Backup válido tipo $tipo encontrado${NC}" | tee -a "$SEARCH_LOG"
-                        mv "${WORK_DIR}/raw_block_${block}.dat" \
-                           "${WORK_DIR}/${tipo}/originales/recovered_block_${block}_${TIMESTAMP}.bak"
-                        break
-                    else
-                        echo -e "No es un backup válido tipo $tipo" | tee -a "$SEARCH_LOG"
-                    fi
-                done
-            else
-                echo -e "No se encontró contenido relevante" | tee -a "$SEARCH_LOG"
-                rm "${WORK_DIR}/raw_block_${block}.dat"
-            fi
-            echo -e "=== Fin Análisis Bloque $block ===\n" | tee -a "$SEARCH_LOG"
-        done < "$PATTERNS_FOUND.blocks"
+    # Verificar que existan patrones antes de calcular
+    if [ -f "${WORK_DIR}/successful_patterns.txt" ] && [ -f "$PATTERNS_FOUND" ]; then
+        local total_patterns=$(wc -l < "$PATTERNS_FOUND")
+        if [ "$total_patterns" -gt 0 ]; then
+            local successful_patterns=$(wc -l < "${WORK_DIR}/successful_patterns.txt")
+            success_rate=$(( (successful_patterns * 100) / total_patterns ))
+        fi
     fi
     
-    # Resumen final
-    {
-        echo -e "\n=== Resumen de Búsqueda ==="
-        echo "Fecha fin: $(date)"
-        echo "Bloques analizados: $total_blocks"
-        echo "Patrones encontrados: $(wc -l < "$PATTERNS_FOUND.blocks")"
-        echo "============================"
-    } | tee -a "$SEARCH_LOG"
+    echo -e "\n${BLUE}=== Ajustando estrategia de búsqueda ===${NC}" | tee -a "$LEARNING_LOG"
+    echo "Tasa de éxito actual: ${success_rate}%" | tee -a "$LEARNING_LOG"
+    
+    # Ajustar tamaño de bloque basado en el éxito
+    if [ $success_rate -lt 20 ]; then
+        RAW_BLOCK_SIZE=$((RAW_BLOCK_SIZE / 2))
+        echo "Reduciendo tamaño de bloque a: $RAW_BLOCK_SIZE" | tee -a "$LEARNING_LOG"
+    elif [ $success_rate -gt 80 ]; then
+        RAW_BLOCK_SIZE=$((RAW_BLOCK_SIZE * 2))
+        echo "Aumentando tamaño de bloque a: $RAW_BLOCK_SIZE" | tee -a "$LEARNING_LOG"
+    fi
+    
+    # Notificar cambios significativos
+    if [ $success_rate -lt 10 ]; then
+        send_email_notification "Ajuste de Estrategia" "Tasa de éxito muy baja ($success_rate%). Ajustando parámetros de búsqueda."
+    fi
+}
+
+analyze_results() {
+    local ANALYSIS_LOG="${LOG_DIR}/analysis_${TIMESTAMP}.log"
+    
+    echo -e "\n${BLUE}=== Análisis de Resultados ===${NC}" | tee -a "$ANALYSIS_LOG"
+    
+    # Analizar patrones exitosos
+    if [ -f "${WORK_DIR}/successful_patterns.txt" ]; then
+        echo "Patrones más efectivos:" | tee -a "$ANALYSIS_LOG"
+        sort "${WORK_DIR}/successful_patterns.txt" | uniq -c | sort -nr | head -n 5 | tee -a "$ANALYSIS_LOG"
+    fi
+    
+    # Analizar distribución de hallazgos
+    if [ -f "${WORK_DIR}/successful_blocks.txt" ]; then
+        echo -e "\nDistribución de hallazgos:" | tee -a "$ANALYSIS_LOG"
+        awk '{print int($1/100)*100}' "${WORK_DIR}/successful_blocks.txt" | 
+        sort -n | uniq -c | 
+        awk '{printf "Región %8d MB: %d hallazgos\n", $2, $1}' | tee -a "$ANALYSIS_LOG"
+    fi
+}
+
+# Función para enviar correos
+send_email_notification() {
+    local subject="$1"
+    local message="$2"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    
+    (
+    echo "Subject: [Recuperacion] $subject"
+    echo "From: jaime911@gmail.com"
+    echo "To: jaime911@gmail.com"
+    echo
+    echo "$message"
+    echo "----------------------------------------"
+    echo "Fecha: $timestamp"
+    echo "Host: $(hostname)"
+    echo "Disco: $DISCO_FUENTE"
+    echo "----------------------------------------"
+    ) | sendmail jaime911@gmail.com
+    
+    echo "[${timestamp}] Email enviado: $subject" >> "${LOG_DIR}/email_${TIMESTAMP}.log"
 }
 
 ######################################
@@ -430,6 +609,9 @@ main() {
     
     # Verificar herramientas necesarias
     check_tools
+    
+    # Configurar correo antes de iniciar
+    setup_email
     
     # Verificar montaje seguro del disco
     mount_disk_safely
@@ -472,12 +654,15 @@ main() {
         echo "Espacio total recuperado: $(du -sh "$WORK_DIR")"
         echo "==================================="
     } >> "$RECOVERY_LOG"
+    
+    # Analizar resultados
+    analyze_results
 }
 
 # Verificar herramientas necesarias
 check_tools() {
     local missing_tools=()
-    local tools=("dd" "grep" "pv" "parallel" "strings" "hexdump")
+    local tools=("dd" "grep" "pv" "parallel" "strings" "hexdump" "sendmail")
     
     echo -e "${YELLOW}Verificando herramientas necesarias...${NC}"
     
@@ -495,6 +680,97 @@ check_tools() {
     fi
     
     echo -e "${GREEN}✓ Todas las herramientas necesarias están instaladas${NC}"
+}
+
+# Función para procesar cada bloque
+process_block() {
+    local block="$1"
+    local total_blocks="$2"
+    local output_file="${WORK_DIR}/raw_block_${block}.dat"
+    
+    # Mostrar progreso cada 10 bloques
+    if [ $((block % 10)) -eq 0 ]; then
+        echo -ne "\r${YELLOW}Progreso: Bloque $block de $total_blocks ($(( (block * 100) / total_blocks ))%)${NC}"
+    fi
+    
+    # Verificar límites
+    local disk_size=$(blockdev --getsize64 "$DISCO_FUENTE")
+    if [ $((block * RAW_BLOCK_SIZE)) -ge "$disk_size" ]; then
+        return 0
+    fi
+    
+    # Buscar firmas silenciosamente
+    if dd if="$DISCO_FUENTE" bs="$RAW_BLOCK_SIZE" skip="$block" count=1 2>/dev/null | \
+       hexdump -C | grep -q -E "$(printf '|%s' "${BACKUP_SIGNATURES[@]}")"; then
+        
+        echo -e "\n${GREEN}✓ Firma de backup encontrada en bloque $block${NC}"
+        echo "$block" >> "${WORK_DIR}/successful_blocks.txt"
+        
+        # Extraer y validar
+        if dd if="$DISCO_FUENTE" bs="$RAW_BLOCK_SIZE" skip="$block" count=2 2>/dev/null > "$output_file"; then
+            for tipo in "${!TAMANOS_ESPERADOS[@]}"; do
+                if validate_backup_integrity "$output_file" "${TAMANOS_ESPERADOS[$tipo]}"; then
+                    mv "$output_file" "${WORK_DIR}/${tipo}/originales/recovered_block_${block}_${TIMESTAMP}.bak"
+                    # Solo notificar cuando encontramos un backup válido
+                    send_email_notification "Backup Recuperado" "Se ha recuperado un backup válido del bloque $block:
+- Tipo: $tipo
+- Tamaño: $(stat -c%s "$output_file" | numfmt --to=iec-i --suffix=B)
+- Ubicación: ${WORK_DIR}/${tipo}/originales/"
+                    return 0
+                fi
+            done
+            rm -f "$output_file"
+        fi
+    fi
+    return 0
+}
+
+# Actualizar la función setup_email
+setup_email() {
+    echo "=== Ajustando configuración de Postfix para IPv4 ==="
+    sudo tee /etc/postfix/main.cf << 'EOF'
+compatibility_level = 3.6
+myhostname = localhost
+mydomain = localhost
+myorigin = localhost
+inet_interfaces = loopback-only
+mydestination = localhost, localhost.localdomain, localhost
+
+# Fuerza uso de IPv4
+inet_protocols = ipv4
+
+relayhost = [smtp.gmail.com]:587
+smtp_tls_security_level = encrypt
+smtp_sasl_auth_enable = yes
+smtp_sasl_password_maps = lmdb:/etc/postfix/sasl_passwd
+smtp_sasl_security_options = noanonymous
+smtp_sasl_mechanism_filter = plain
+smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
+EOF
+
+    echo "=== Configurando credenciales ==="
+    # Usa un tabulador entre la parte de la dirección y la contraseña
+    echo -e "[smtp.gmail.com]:587\tjaime911@gmail.com:bbxxvzdasmctqdnn" | sudo tee /etc/postfix/sasl_passwd
+    sudo postmap /etc/postfix/sasl_passwd
+    sudo chmod 600 /etc/postfix/sasl_passwd*
+
+    echo "=== Reiniciando Postfix ==="
+    sudo systemctl restart postfix
+
+    echo "=== Enviando correo de prueba ==="
+    (
+    echo "Subject: [Recuperacion] Inicio del Proceso"
+    echo "From: jaime911@gmail.com"
+    echo "To: jaime911@gmail.com"
+    echo
+    echo "Iniciando proceso de recuperación"
+    echo "----------------------------------------"
+    echo "Fecha: $(date)"
+    echo "Host: $(hostname)"
+    echo "Disco: $DISCO_FUENTE"
+    echo "Tamaño: $(blockdev --getsize64 $DISCO_FUENTE | numfmt --to=iec-i --suffix=B)"
+    echo "----------------------------------------"
+    ) | sendmail jaime911@gmail.com
 }
 
 # Iniciar proceso
