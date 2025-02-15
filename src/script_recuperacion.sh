@@ -469,9 +469,16 @@ recover_from_raw_sectors() {
     mkdir -p "${WORK_DIR}/learning"
     mkdir -p "${WORK_DIR}"/{BMS,BMSJoseDiego,BMSsa}/originales
     
-    # Inicializar archivos
-    touch "${WORK_DIR}/successful_patterns.txt"
-    touch "${WORK_DIR}/successful_blocks.txt"
+    # Archivo de checkpoint
+    local CHECKPOINT_FILE="${WORK_DIR}/checkpoint.dat"
+    local start_block=0
+    
+    # Verificar si existe checkpoint
+    if [ -f "$CHECKPOINT_FILE" ]; then
+        start_block=$(cat "$CHECKPOINT_FILE")
+        echo -e "${GREEN}Reanudando desde bloque $start_block${NC}"
+        log_message "INFO" "Reanudando desde bloque $start_block" "$RECOVERY_LOG"
+    fi
     
     # Obtener tamaño del disco
     local disk_size=$(blockdev --getsize64 "$DISCO_FUENTE")
@@ -481,13 +488,20 @@ recover_from_raw_sectors() {
     log_message "INFO" "- Disco: $DISCO_FUENTE" "$RECOVERY_LOG"
     log_message "INFO" "- Tamaño: $(numfmt --to=iec-i --suffix=B $disk_size)" "$RECOVERY_LOG"
     log_message "INFO" "- Bloques: $total_blocks" "$RECOVERY_LOG"
+    log_message "INFO" "- Iniciando desde: $start_block" "$RECOVERY_LOG"
     
     echo -e "\n${BLUE}Iniciando escaneo de bloques...${NC}"
     echo -e "${YELLOW}Presiona Ctrl+C para interrumpir de forma segura${NC}"
     
-    # Escanear bloques con barra de progreso
-    for block in $(seq 0 $total_blocks); do
+    # Escanear bloques con checkpoint cada 100 bloques
+    for block in $(seq $start_block $total_blocks); do
         process_block "$block" "$total_blocks" || break
+        
+        # Guardar checkpoint cada 100 bloques
+        if [ $((block % 100)) -eq 0 ]; then
+            echo "$block" > "$CHECKPOINT_FILE"
+            sync  # Forzar escritura a disco
+        fi
     done
     
     return 0
@@ -711,6 +725,9 @@ process_block() {
     local total_blocks="$2"
     local output_file="${WORK_DIR}/raw_block_${block}.dat"
     
+    # Actualizar variable global de bloque actual
+    current_block=$block
+    
     # Mostrar progreso cada 10 bloques
     if [ $((block % 10)) -eq 0 ]; then
         echo -ne "\r${YELLOW}Progreso: Bloque $block de $total_blocks ($(( (block * 100) / total_blocks ))%)${NC}"
@@ -772,6 +789,26 @@ Disco: $DISCO_FUENTE
 Tamaño: $(blockdev --getsize64 $DISCO_FUENTE | numfmt --to=iec-i --suffix=B)
 ----------------------------------------" | \
     mailx -v -s "[Recuperacion] Inicio del Proceso" jaime911@gmail.com
+}
+
+# Añadir variable global al inicio del script
+declare -g current_block=0
+
+# Al inicio del script, después de las variables
+trap 'handle_interrupt' SIGINT SIGTERM
+
+# Función para manejar interrupciones
+handle_interrupt() {
+    echo -e "\n${YELLOW}Interrupción detectada. Guardando progreso...${NC}"
+    
+    # Guardar último bloque procesado
+    if [ -n "$current_block" ]; then
+        echo "$current_block" > "${WORK_DIR}/checkpoint.dat"
+        sync
+    fi
+    
+    echo -e "${GREEN}Progreso guardado. Puede reanudar más tarde desde el bloque $current_block${NC}"
+    exit 0
 }
 
 # Iniciar proceso
