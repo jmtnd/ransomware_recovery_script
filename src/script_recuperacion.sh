@@ -40,16 +40,13 @@ BACKUP_PATTERNS=(
 
 # Tamaños esperados por tipo (en bytes)
 declare -A TAMANOS_ESPERADOS=(
-    ["BMS"]=17992074248
-    ["BMSJoseDiego"]=16564105224
     ["BMSsa"]=22305395720
 )
 
 # Buscar secuencias de bytes comunes en backups
 BACKUP_SIGNATURES=(
-    "424D53"          # "BMS" en hex
-    "4241434B5550"    # "BACKUP" en hex
-    "424D535F4241434B5550"  # "BMS_BACKUP" en hex
+    "424D537361"      # "BMSsa" en hex
+    "424D5373615F4241434B5550"  # "BMSsa_BACKUP" en hex
 )
 
 ########################################
@@ -728,10 +725,8 @@ process_block() {
     # Actualizar variable global de bloque actual
     current_block=$block
     
-    # Mostrar progreso cada 10 bloques
-    if [ $((block % 10)) -eq 0 ]; then
-        echo -ne "\r${YELLOW}Progreso: Bloque $block de $total_blocks ($(( (block * 100) / total_blocks ))%)${NC}"
-    fi
+    # Mostrar progreso cada bloque
+    echo -ne "\r${YELLOW}Progreso: Bloque $block de $total_blocks ($(( (block * 100) / total_blocks ))%) - Buscando BMSsa${NC}"
     
     # Verificar límites
     local disk_size=$(blockdev --getsize64 "$DISCO_FUENTE")
@@ -739,29 +734,35 @@ process_block() {
         return 0
     fi
     
-    # Buscar firmas silenciosamente
-    if dd if="$DISCO_FUENTE" bs="$RAW_BLOCK_SIZE" skip="$block" count=1 2>/dev/null | \
-       hexdump -C | grep -q -E "$(printf '|%s' "${BACKUP_SIGNATURES[@]}")"; then
-        
-        echo -e "\n${GREEN}✓ Firma de backup encontrada en bloque $block${NC}"
+    # Buscar firmas específicas de BMSsa
+    timeout 30s dd if="$DISCO_FUENTE" bs="$RAW_BLOCK_SIZE" skip="$block" count=1 2>/dev/null | \
+    hexdump -C | grep -q -E "$(printf '|%s' "${BACKUP_SIGNATURES[@]}")" && {
+        echo -e "\n${GREEN}✓ Firma de BMSsa encontrada en bloque $block${NC}"
         echo "$block" >> "${WORK_DIR}/successful_blocks.txt"
         
-        # Extraer y validar
-        if dd if="$DISCO_FUENTE" bs="$RAW_BLOCK_SIZE" skip="$block" count=2 2>/dev/null > "$output_file"; then
-            for tipo in "${!TAMANOS_ESPERADOS[@]}"; do
-                if validate_backup_integrity "$output_file" "${TAMANOS_ESPERADOS[$tipo]}"; then
-                    mv "$output_file" "${WORK_DIR}/${tipo}/originales/recovered_block_${block}_${TIMESTAMP}.bak"
-                    # Solo notificar cuando encontramos un backup válido
-                    send_email_notification "Backup Recuperado" "Se ha recuperado un backup válido del bloque $block:
-- Tipo: $tipo
-- Tamaño: $(stat -c%s "$output_file" | numfmt --to=iec-i --suffix=B)
-- Ubicación: ${WORK_DIR}/${tipo}/originales/"
-                    return 0
-                fi
-            done
-            rm -f "$output_file"
+        # Extraer y validar con timeout
+        timeout 60s dd if="$DISCO_FUENTE" bs="$RAW_BLOCK_SIZE" skip="$block" count=2 2>/dev/null > "$output_file"
+        
+        if validate_backup_integrity "$output_file" "${TAMANOS_ESPERADOS[BMSsa]}"; then
+            mv "$output_file" "${WORK_DIR}/BMSsa/originales/recovered_block_${block}_${TIMESTAMP}.bak"
+            send_email_notification "BMSsa Backup Encontrado" "Se ha recuperado un backup BMSsa válido del bloque $block"
+            return 0
         fi
+        rm -f "$output_file"
+    }
+    
+    # Verificar si debemos pausar o detener
+    if [ "$STOP_SCAN" -eq 1 ]; then
+        echo -e "\n${RED}Deteniendo escaneo...${NC}"
+        return 1
     fi
+    
+    if [ "$PAUSE_SCAN" -eq 1 ]; then
+        echo -e "\n${YELLOW}Proceso pausado. Presiona ENTER para continuar o Ctrl+\ para detener${NC}"
+        read -r
+        PAUSE_SCAN=0
+    fi
+    
     return 0
 }
 
@@ -795,21 +796,39 @@ Tamaño: $(blockdev --getsize64 $DISCO_FUENTE | numfmt --to=iec-i --suffix=B)
 declare -g current_block=0
 
 # Al inicio del script, después de las variables
-trap 'handle_interrupt' SIGINT SIGTERM
+declare -g PAUSE_SCAN=0
+declare -g STOP_SCAN=0
 
-# Función para manejar interrupciones
-handle_interrupt() {
-    echo -e "\n${YELLOW}Interrupción detectada. Guardando progreso...${NC}"
-    
-    # Guardar último bloque procesado
+# Función para manejar señales
+handle_signals() {
+    echo -e "\n${YELLOW}Manejando señal $1...${NC}"
+    case "$1" in
+        SIGINT)  # Ctrl+C
+            echo -e "${YELLOW}Presiona Ctrl+C otra vez para detener, o SPACE para pausar${NC}"
+            PAUSE_SCAN=1
+            ;;
+        SIGQUIT)  # Ctrl+\
+            echo -e "${RED}Deteniendo proceso...${NC}"
+            STOP_SCAN=1
+            ;;
+        SIGTERM)  # kill -15
+            echo -e "${RED}Recibida señal de terminación${NC}"
+            STOP_SCAN=1
+            ;;
+    esac
+
+    # Guardar progreso actual
     if [ -n "$current_block" ]; then
         echo "$current_block" > "${WORK_DIR}/checkpoint.dat"
         sync
+        echo -e "${GREEN}Progreso guardado en bloque $current_block${NC}"
     fi
-    
-    echo -e "${GREEN}Progreso guardado. Puede reanudar más tarde desde el bloque $current_block${NC}"
-    exit 0
 }
+
+# Registrar manejadores de señales
+trap 'handle_signals SIGINT' SIGINT
+trap 'handle_signals SIGQUIT' SIGQUIT
+trap 'handle_signals SIGTERM' SIGTERM
 
 # Iniciar proceso
 main "$@" 
