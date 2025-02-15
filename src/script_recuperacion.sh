@@ -573,24 +573,28 @@ analyze_results() {
     fi
 }
 
-# Función para enviar correos
+# Modificar la función send_email_notification
 send_email_notification() {
     local subject="$1"
     local message="$2"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     
+    # Usar mailx en lugar de sendmail para mejor manejo de SMTP
     (
-    echo "Subject: [Recuperacion] $subject"
-    echo "From: jaime911@gmail.com"
-    echo "To: jaime911@gmail.com"
-    echo
     echo "$message"
     echo "----------------------------------------"
     echo "Fecha: $timestamp"
     echo "Host: $(hostname)"
     echo "Disco: $DISCO_FUENTE"
     echo "----------------------------------------"
-    ) | sendmail jaime911@gmail.com
+    ) | mailx -v -s "[Recuperacion] $subject" \
+              -S smtp=smtp.gmail.com:587 \
+              -S smtp-use-starttls \
+              -S smtp-auth=login \
+              -S smtp-auth-user=jaime911@gmail.com \
+              -S smtp-auth-password=bbxxvzdasmctqdnn \
+              -S ssl-verify=ignore \
+              jaime911@gmail.com
     
     echo "[${timestamp}] Email enviado: $subject" >> "${LOG_DIR}/email_${TIMESTAMP}.log"
 }
@@ -727,50 +731,28 @@ process_block() {
 
 # Actualizar la función setup_email
 setup_email() {
-    echo "=== Ajustando configuración de Postfix para IPv4 ==="
-    sudo tee /etc/postfix/main.cf << 'EOF'
-compatibility_level = 3.6
-myhostname = localhost
-mydomain = localhost
-myorigin = localhost
-inet_interfaces = loopback-only
-mydestination = localhost, localhost.localdomain, localhost
-
-# Fuerza uso de IPv4
-inet_protocols = ipv4
-
-relayhost = [smtp.gmail.com]:587
-smtp_tls_security_level = encrypt
-smtp_sasl_auth_enable = yes
-smtp_sasl_password_maps = lmdb:/etc/postfix/sasl_passwd
-smtp_sasl_security_options = noanonymous
-smtp_sasl_mechanism_filter = plain
-smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
+    echo "=== Configurando mailx para Gmail ==="
+    # Configurar mailx
+    sudo tee /etc/mail.rc << 'EOF'
+set smtp=smtp.gmail.com:587
+set smtp-use-starttls
+set smtp-auth=login
+set smtp-auth-user=jaime911@gmail.com
+set smtp-auth-password=bbxxvzdasmctqdnn
+set ssl-verify=ignore
+set nss-config-dir=/etc/pki/nssdb/
 EOF
 
-    echo "=== Configurando credenciales ==="
-    # Usa un tabulador entre la parte de la dirección y la contraseña
-    echo -e "[smtp.gmail.com]:587\tjaime911@gmail.com:bbxxvzdasmctqdnn" | sudo tee /etc/postfix/sasl_passwd
-    sudo postmap /etc/postfix/sasl_passwd
-    sudo chmod 600 /etc/postfix/sasl_passwd*
-
-    echo "=== Reiniciando Postfix ==="
-    sudo systemctl restart postfix
-
+    # Enviar correo de prueba
     echo "=== Enviando correo de prueba ==="
-    (
-    echo "Subject: [Recuperacion] Inicio del Proceso"
-    echo "From: jaime911@gmail.com"
-    echo "To: jaime911@gmail.com"
-    echo
-    echo "Iniciando proceso de recuperación"
-    echo "----------------------------------------"
-    echo "Fecha: $(date)"
-    echo "Host: $(hostname)"
-    echo "Disco: $DISCO_FUENTE"
-    echo "Tamaño: $(blockdev --getsize64 $DISCO_FUENTE | numfmt --to=iec-i --suffix=B)"
-    echo "----------------------------------------"
-    ) | sendmail jaime911@gmail.com
+    echo "Iniciando proceso de recuperación
+----------------------------------------
+Fecha: $(date)
+Host: $(hostname)
+Disco: $DISCO_FUENTE
+Tamaño: $(blockdev --getsize64 $DISCO_FUENTE | numfmt --to=iec-i --suffix=B)
+----------------------------------------" | \
+    mailx -v -s "[Recuperacion] Inicio del Proceso" jaime911@gmail.com
 }
 
 # Iniciar proceso
