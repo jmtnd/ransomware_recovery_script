@@ -1,18 +1,42 @@
 # Ransomware Recovery Script
 
-Herramienta especializada para la recuperación de backups BMS afectados por ransomware mediante análisis de sectores raw del disco.
+Herramienta para recuperación de backups BMS afectados por ransomware mediante análisis de sectores raw.
 
-## 🔍 Descripción
-
-Este proyecto proporciona scripts para recuperar backups BMS que han sido cifrados por ransomware. La herramienta realiza una búsqueda profunda en los sectores del disco para encontrar versiones no cifradas de los backups, utilizando patrones y firmas específicas.
-
-## ⚙️ Características
-
+## Características
 - Búsqueda profunda en sectores raw del disco
-- Detección y diferenciación de backups cifrados vs originales
+- Detección de backups cifrados vs originales
 - Análisis de patrones y firmas hexadecimales
-- Sistema de logging detallado para seguimiento del proceso
-- Validación de integridad de backups recuperados
-- Soporte para múltiples tipos de backup (BMS, BMSJoseDiego, BMSsa)
+- Logging detallado del proceso
+- Validación de integridad de backups
 
-[... resto del README que te mostré antes ...]
+## Requisitos
+- dd
+- grep
+- pv
+- parallel
+- strings
+- hexdump
+- ent
+
+## Estructura
+```
+.
+├── src/
+│   ├── script_recuperacion.sh
+│   └── analizar_backups.sh
+├── docs/
+├── tests/
+└── logs/
+```
+
+## Uso
+
+1. Análisis inicial:
+```bash
+sudo ./src/analizar_backups.sh
+```
+
+2. Recuperación:
+```bash
+sudo ./src/script_recuperacion.sh
+```
