@@ -1,0 +1,14 @@
+# Logs
+logs/*
+*.log
+
+# Archivos temporales
+*.tmp
+*.dat
+*.raw
+
+# Directorios de recuperación
+recuperados_*
+
+# Otros
+.DS_Store

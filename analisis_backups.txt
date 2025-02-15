@@ -1,0 +1,39 @@
+=== Análisis de Backups ===
+Fecha: Fri Feb 14 11:23:13 PM UTC 2025
+
+Archivos cifrados encontrados:
+--------------------------------
+[0;31mArchivo: BMSJoseDiego_backup_2025_02_09_210001_1812948.bak.[4c1d8d1e9e].[stp9@startmail.com].nigra[0m
+  Fecha original: 2025_02_09_210001
+  Email atacante: 4c1d8d1e9e.stp9@startmail.com
+
+[0;31mArchivo: BMSJoseDiego_backup_2025_02_10_210004_4837489.bak.[4c1d8d1e9e].[stp9@startmail.com].nigra[0m
+  Fecha original: 2025_02_10_210004
+  Email atacante: 4c1d8d1e9e.stp9@startmail.com
+
+[0;31mArchivo: BMSJoseDiego_backup_2025_02_11_210003_6422571.bak.[4c1d8d1e9e].[stp9@startmail.com].nigra[0m
+  Fecha original: 2025_02_11_210003
+  Email atacante: 4c1d8d1e9e.stp9@startmail.com
+
+[0;31mArchivo: BMSsa_backup_2025_02_09_210001_1812948.bak.[4c1d8d1e9e].[stp9@startmail.com].nigra[0m
+  Fecha original: 2025_02_09_210001
+  Email atacante: 4c1d8d1e9e.stp9@startmail.com
+
+[0;31mArchivo: BMSsa_backup_2025_02_10_210004_4937491.bak.[4c1d8d1e9e].[stp9@startmail.com].nigra[0m
+  Fecha original: 2025_02_10_210004
+  Email atacante: 4c1d8d1e9e.stp9@startmail.com
+
+[0;31mArchivo: BMSsa_backup_2025_02_11_210003_6422571.bak.[4c1d8d1e9e].[stp9@startmail.com].nigra[0m
+  Fecha original: 2025_02_11_210003
+  Email atacante: 4c1d8d1e9e.stp9@startmail.com
+
+[0;31mArchivo: BMS_backup_2025_02_10_210004_4437488.bak.[4c1d8d1e9e].[stp9@startmail.com].nigra[0m
+  Fecha original: 2025_02_10_210004
+  Email atacante: 4c1d8d1e9e.stp9@startmail.com
+
+[0;31mArchivo: BMS_backup_2025_02_11_210003_5722570.bak.[4c1d8d1e9e].[stp9@startmail.com].nigra[0m
+  Fecha original: 2025_02_11_210003
+  Email atacante: 4c1d8d1e9e.stp9@startmail.com
+
+Archivos no cifrados:
+--------------------------------
